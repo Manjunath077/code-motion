@@ -1,0 +1,66 @@
+version: "3.9"
+
+# ── How env vars work ──────────────────────────────────────────────────────────
+# env_file loads everything from backend/.env (LLM_API_KEY, LLM_MODEL,
+# LLM_BASE_URL, LLM_TEMPERATURE, LLM_TIMEOUT, MONGODB_DB_NAME, MEDIA_DIR,
+# ALLOWED_ORIGINS, etc.)
+#
+# The environment: block below OVERRIDES specific values from that file so
+# Docker service hostnames are used instead of localhost — no .env edits needed
+# when switching between local dev and docker-compose.
+#
+# Ollama note: if LLM_BASE_URL points to a local Ollama instance, set it to
+# http://host.docker.internal:11434 in backend/.env when running via Docker.
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: ./backend/.env
+    environment:
+      MONGODB_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: production
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - ./media:/app/media
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    env_file: ./backend/.env
+    environment:
+      MONGODB_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: production
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - ./media:/app/media
+
+volumes:
+  mongo_data:
