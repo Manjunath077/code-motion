@@ -1,180 +1,156 @@
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-from bson import ObjectId
+import uuid
 
-from app.repository.scene_repository import (
-    create_scene,
-    get_scene_by_id,
-    update_scene_status,
-    delete_scene,
-    list_scenes,
-)
+import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+import app.repository.scene_repository as repo
+from app.db.base import Base
+from app.db import models  # noqa: F401 — registers tables on Base.metadata
 from app.schemas.scene_schema import SceneStatus
 
-
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-def _scene_doc(oid=None):
-    oid = oid or ObjectId()
-    return {
-        "_id": oid,
-        "prompt": "test prompt",
-        "generated_script": None,
-        "status": SceneStatus.PENDING,
-        "video_url": None,
-        "error_message": None,
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-    }
+# These tests run against a real (in-memory) SQLite database rather than mocks,
+# since faking SQLAlchemy's query layer convincingly is more fragile than just
+# exercising the repository against a throwaway schema — no external service
+# involved, so this still satisfies "unit: no external dependencies".
 
 
-def _mock_collection():
-    col = MagicMock()
-    col.insert_one = AsyncMock()
-    col.find_one = AsyncMock()
-    col.update_one = AsyncMock()
-    col.delete_one = AsyncMock()
-    col.count_documents = AsyncMock()
-    cursor = MagicMock()
-    cursor.sort.return_value = cursor
-    cursor.skip.return_value = cursor
-    cursor.limit.return_value = cursor
-    cursor.to_list = AsyncMock(return_value=[])
-    col.find.return_value = cursor
-    return col, cursor
+@pytest.fixture
+async def session_factory(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(repo, "AsyncSessionLocal", factory)
 
-def _mock_db(col):
-    db = MagicMock()
-    db.scenes = col
-    return db
+    yield factory
+
+    await engine.dispose()
 
 
 # ── create_scene ──────────────────────────────────────────────────────────────
 
-async def test_create_scene_returns_scene_document():
-    col, _ = _mock_collection()
-    oid = ObjectId()
-    col.insert_one.return_value = MagicMock(inserted_id=oid)
+async def test_create_scene_returns_scene_document(session_factory):
+    scene = await repo.create_scene("test prompt")
 
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        scene = await create_scene("test prompt")
-
-    assert scene.id == str(oid)
     assert scene.prompt == "test prompt"
     assert scene.status == SceneStatus.PENDING
     assert scene.generated_script is None
-    col.insert_one.assert_called_once()
+    uuid.UUID(scene.id)  # doesn't raise
 
 
 # ── get_scene_by_id ───────────────────────────────────────────────────────────
 
-async def test_get_scene_by_id_found():
-    col, _ = _mock_collection()
-    doc = _scene_doc()
-    col.find_one.return_value = doc
+async def test_get_scene_by_id_found(session_factory):
+    created = await repo.create_scene("test prompt")
 
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        scene = await get_scene_by_id(str(doc["_id"]))
+    fetched = await repo.get_scene_by_id(created.id)
 
-    assert scene is not None
-    assert scene.id == str(doc["_id"])
-    assert scene.prompt == "test prompt"
+    assert fetched is not None
+    assert fetched.id == created.id
+    assert fetched.prompt == "test prompt"
 
 
-async def test_get_scene_by_id_not_found_returns_none():
-    col, _ = _mock_collection()
-    col.find_one.return_value = None
-
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        scene = await get_scene_by_id(str(ObjectId()))
-
+async def test_get_scene_by_id_not_found_returns_none(session_factory):
+    scene = await repo.get_scene_by_id(str(uuid.uuid4()))
     assert scene is None
 
 
-async def test_get_scene_by_id_invalid_id_returns_none():
-    db = MagicMock()
-    with patch("app.repository.scene_repository.get_db", return_value=db):
-        scene = await get_scene_by_id("not-a-valid-objectid")
+async def test_get_scene_by_id_invalid_id_returns_none(session_factory):
+    scene = await repo.get_scene_by_id("not-a-valid-uuid")
     assert scene is None
 
 
 # ── update_scene_status ───────────────────────────────────────────────────────
 
-async def test_update_scene_status_calls_update_one():
-    col, _ = _mock_collection()
-    scene_id = str(ObjectId())
+async def test_update_scene_status_updates_status(session_factory):
+    created = await repo.create_scene("test prompt")
 
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        await update_scene_status(scene_id, SceneStatus.COMPLETED)
+    await repo.update_scene_status(created.id, SceneStatus.COMPLETED)
 
-    col.update_one.assert_called_once()
-    _, update_arg = col.update_one.call_args[0]
-    assert update_arg["$set"]["status"] == SceneStatus.COMPLETED
+    fetched = await repo.get_scene_by_id(created.id)
+    assert fetched.status == SceneStatus.COMPLETED
 
 
-async def test_update_scene_status_with_extra_kwargs():
-    col, _ = _mock_collection()
-    scene_id = str(ObjectId())
+async def test_update_scene_status_with_error_message(session_factory):
+    created = await repo.create_scene("test prompt")
 
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        await update_scene_status(scene_id, SceneStatus.FAILED, error_message="boom")
+    await repo.update_scene_status(created.id, SceneStatus.FAILED, error_message="boom")
 
-    _, update_arg = col.update_one.call_args[0]
-    assert update_arg["$set"]["error_message"] == "boom"
+    fetched = await repo.get_scene_by_id(created.id)
+    assert fetched.status == SceneStatus.FAILED
+    assert fetched.error_message == "boom"
+
+
+async def test_update_scene_status_unknown_id_is_a_noop(session_factory):
+    # Should not raise even though nothing exists with this id.
+    await repo.update_scene_status(str(uuid.uuid4()), SceneStatus.FAILED, error_message="boom")
+
+
+# ── update_scene_script / update_scene_video ─────────────────────────────────
+
+async def test_update_scene_script_persists_script(session_factory):
+    created = await repo.create_scene("test prompt")
+
+    await repo.update_scene_script(created.id, "from manim import *")
+
+    fetched = await repo.get_scene_by_id(created.id)
+    assert fetched.generated_script == "from manim import *"
+
+
+async def test_update_scene_video_persists_video_url(session_factory):
+    created = await repo.create_scene("test prompt")
+
+    await repo.update_scene_video(created.id, "/media/abc/output.mp4")
+
+    fetched = await repo.get_scene_by_id(created.id)
+    assert fetched.video_url == "/media/abc/output.mp4"
 
 
 # ── delete_scene ──────────────────────────────────────────────────────────────
 
-async def test_delete_scene_returns_true_when_deleted():
-    col, _ = _mock_collection()
-    col.delete_one.return_value = MagicMock(deleted_count=1)
+async def test_delete_scene_returns_true_when_deleted(session_factory):
+    created = await repo.create_scene("test prompt")
 
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        result = await delete_scene(str(ObjectId()))
+    result = await repo.delete_scene(created.id)
 
     assert result is True
+    assert await repo.get_scene_by_id(created.id) is None
 
 
-async def test_delete_scene_returns_false_when_not_found():
-    col, _ = _mock_collection()
-    col.delete_one.return_value = MagicMock(deleted_count=0)
-
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        result = await delete_scene(str(ObjectId()))
-
+async def test_delete_scene_returns_false_when_not_found(session_factory):
+    result = await repo.delete_scene(str(uuid.uuid4()))
     assert result is False
 
 
-async def test_delete_scene_invalid_id_returns_false():
-    db = MagicMock()
-    with patch("app.repository.scene_repository.get_db", return_value=db):
-        result = await delete_scene("bad-id")
+async def test_delete_scene_invalid_id_returns_false(session_factory):
+    result = await repo.delete_scene("bad-id")
     assert result is False
 
 
 # ── list_scenes ───────────────────────────────────────────────────────────────
 
-async def test_list_scenes_returns_list_and_total():
-    col, cursor = _mock_collection()
-    docs = [_scene_doc(), _scene_doc()]
-    col.count_documents.return_value = 2
-    cursor.to_list.return_value = docs
+async def test_list_scenes_returns_list_and_total(session_factory):
+    await repo.create_scene("first")
+    await repo.create_scene("second")
 
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        scenes, total = await list_scenes(limit=20, skip=0)
+    scenes, total = await repo.list_scenes(limit=20, skip=0)
 
     assert len(scenes) == 2
     assert total == 2
 
 
-async def test_list_scenes_empty():
-    col, cursor = _mock_collection()
-    col.count_documents.return_value = 0
-    cursor.to_list.return_value = []
-
-    with patch("app.repository.scene_repository.get_db", return_value=_mock_db(col)):
-        scenes, total = await list_scenes()
-
+async def test_list_scenes_empty(session_factory):
+    scenes, total = await repo.list_scenes()
     assert scenes == []
     assert total == 0
+
+
+async def test_list_scenes_respects_limit(session_factory):
+    for i in range(3):
+        await repo.create_scene(f"prompt {i}")
+
+    scenes, total = await repo.list_scenes(limit=2, skip=0)
+
+    assert len(scenes) == 2
+    assert total == 3

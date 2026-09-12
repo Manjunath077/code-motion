@@ -1,11 +1,7 @@
-import litellm  # type: ignore[import]
-from app.core.config import settings
+from app.core.model_router import call_llm
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
-
-# Suppress LiteLLM's verbose internal logging
-litellm.suppress_debug_info = True
 
 _SYSTEM_PROMPT = """
 You are an expert Manim animation engineer specializing in educational computer science visualizations.
@@ -102,22 +98,7 @@ def _enrich_prompt(user_prompt: str) -> str:
 
 
 async def generate_manim_script(user_prompt: str) -> str:
-    kwargs = dict(
-        model=settings.LLM_MODEL,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": _enrich_prompt(user_prompt)},
-        ],
-        api_key=settings.LLM_API_KEY,
-        temperature=settings.LLM_TEMPERATURE,
-        timeout=settings.LLM_TIMEOUT,
-    )
-    if settings.LLM_BASE_URL:
-        kwargs["base_url"] = settings.LLM_BASE_URL
-
-    logger.info("Calling LLM model: %s", settings.LLM_MODEL)
-    response = await litellm.acompletion(**kwargs)
-    content = response.choices[0].message.content
+    content = await call_llm("scene_codegen", _SYSTEM_PROMPT, _enrich_prompt(user_prompt))
     return _clean_script(content)
 
 
@@ -130,22 +111,8 @@ async def fix_manim_script(broken_script: str, error: str) -> str:
         "Fix ONLY the error above. Do not change the animation structure or logic. "
         "Return ONLY the corrected Python code with no markdown fences or explanations."
     )
-    kwargs = dict(
-        model=settings.LLM_MODEL,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": fix_prompt},
-        ],
-        api_key=settings.LLM_API_KEY,
-        temperature=0.1,
-        timeout=settings.LLM_TIMEOUT,
-    )
-    if settings.LLM_BASE_URL:
-        kwargs["base_url"] = settings.LLM_BASE_URL
-
     logger.info("Attempting script repair — error: %s", error[:120])
-    response = await litellm.acompletion(**kwargs)
-    content = response.choices[0].message.content
+    content = await call_llm("scene_codegen", _SYSTEM_PROMPT, fix_prompt)
     return _clean_script(content)
 
 

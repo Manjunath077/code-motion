@@ -1,47 +1,83 @@
 from datetime import datetime, timezone
 from typing import Optional
-from bson import ObjectId  # type: ignore[import]
-from app.db.sync_mongodb import get_sync_db
+from uuid import UUID
+
+from app.db.models import Scene, Video
+from app.db.sync_session import SessionLocal
 from app.schemas.scene_schema import SceneDocument, SceneStatus
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _doc_to_scene(doc: dict) -> SceneDocument:
+def _row_to_scene(video: Video, scene: Scene) -> SceneDocument:
     return SceneDocument(
-        id=str(doc["_id"]),
-        prompt=doc["prompt"],
-        generated_script=doc.get("generated_script"),
-        status=doc["status"],
-        video_url=doc.get("video_url"),
-        error_message=doc.get("error_message"),
-        created_at=doc["created_at"],
-        updated_at=doc["updated_at"],
+        id=str(scene.id),
+        prompt=video.user_prompt,
+        generated_script=scene.generated_script,
+        status=SceneStatus(scene.status),
+        video_url=scene.rendered_segment_url,
+        error_message=scene.error_message,
+        created_at=video.created_at,
+        updated_at=scene.updated_at,
     )
 
 
 def get_scene_by_id_sync(scene_id: str) -> Optional[SceneDocument]:
-    db = get_sync_db()
     try:
-        oid = ObjectId(scene_id)
-    except Exception:
+        s_id = UUID(scene_id)
+    except ValueError:
         return None
-    doc = db.scenes.find_one({"_id": oid})
-    return _doc_to_scene(doc) if doc else None
+
+    with SessionLocal() as session:
+        scene = session.get(Scene, s_id)
+        if scene is None:
+            return None
+        video = session.get(Video, scene.video_id)
+        if video is None:
+            return None
+        return _row_to_scene(video, scene)
 
 
 def update_scene_status_sync(scene_id: str, status: SceneStatus, **kwargs) -> None:
-    db = get_sync_db()
-    fields = {"status": status, "updated_at": datetime.now(timezone.utc)}
-    fields.update(kwargs)
-    db.scenes.update_one({"_id": ObjectId(scene_id)}, {"$set": fields})
+    try:
+        s_id = UUID(scene_id)
+    except ValueError:
+        return
+
+    with SessionLocal() as session:
+        scene = session.get(Scene, s_id)
+        if scene is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        scene.status = status.value
+        scene.updated_at = now
+        if "error_message" in kwargs:
+            scene.error_message = kwargs["error_message"]
+
+        video = session.get(Video, scene.video_id)
+        if video is not None:
+            video.status = status.value
+            video.updated_at = now
+            if "error_message" in kwargs:
+                video.error_message = kwargs["error_message"]
+
+        session.commit()
+
     logger.info("Scene %s status → %s", scene_id, status)
 
 
 def update_scene_video_sync(scene_id: str, video_url: str) -> None:
-    db = get_sync_db()
-    db.scenes.update_one(
-        {"_id": ObjectId(scene_id)},
-        {"$set": {"video_url": video_url, "updated_at": datetime.now(timezone.utc)}},
-    )
+    try:
+        s_id = UUID(scene_id)
+    except ValueError:
+        return
+
+    with SessionLocal() as session:
+        scene = session.get(Scene, s_id)
+        if scene is None:
+            return
+        scene.rendered_segment_url = video_url
+        scene.updated_at = datetime.now(timezone.utc)
+        session.commit()

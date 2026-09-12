@@ -12,7 +12,7 @@ from app.api.v1.api_router import api_router
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.logging import get_logger
-from app.db.mongodb import connect_db, close_db
+from app.db.session import connect_db, close_db
 
 logger = get_logger(__name__)
 
@@ -21,12 +21,12 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     if settings.APP_ENV == "development":
         logger.warning("Running in DEVELOPMENT mode — do not use in production")
-    logger.info("LLM model: %s | API key loaded: %s", settings.LLM_MODEL, "yes" if settings.LLM_API_KEY else "NO")
+    logger.info("Groq API key loaded: %s", "yes" if settings.GROQ_API_KEY else "NO")
     await connect_db()
-    logger.info("MongoDB connected")
+    logger.info("PostgreSQL connected")
     yield
     await close_db()
-    logger.info("MongoDB disconnected")
+    logger.info("PostgreSQL disconnected")
 
 
 app = FastAPI(title="Code-Motion Backend", version="1.0.0", lifespan=lifespan)

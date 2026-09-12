@@ -2,10 +2,22 @@ fastapi
 uvicorn[standard]
 pydantic-settings
 python-dotenv
-litellm
-motor
-pymongo
+sqlalchemy>=2.0
+asyncpg
+psycopg[binary]
+alembic
+langchain
+langchain-groq
+langgraph
+tenacity
+aiolimiter
 redis
 celery[redis]
 manim
 slowapi
+
+# test-only: in-memory SQLite for repository unit tests (no real DB needed)
+aiosqlite
+pytest
+pytest-asyncio
+httpx
