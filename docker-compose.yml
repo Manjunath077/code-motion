@@ -1,29 +1,44 @@
 version: "3.9"
 
 # ── How env vars work ──────────────────────────────────────────────────────────
-# env_file loads everything from backend/.env (LLM_API_KEY, LLM_MODEL,
-# LLM_BASE_URL, LLM_TEMPERATURE, LLM_TIMEOUT, MONGODB_DB_NAME, MEDIA_DIR,
-# ALLOWED_ORIGINS, etc.)
+# env_file loads everything from backend/.env (GROQ_API_KEY, LLM_TEMPERATURE,
+# LLM_TIMEOUT, MEDIA_DIR, ALLOWED_ORIGINS, etc.)
 #
 # The environment: block below OVERRIDES specific values from that file so
 # Docker service hostnames are used instead of localhost — no .env edits needed
 # when switching between local dev and docker-compose.
-#
-# Ollama note: if LLM_BASE_URL points to a local Ollama instance, set it to
-# http://host.docker.internal:11434 in backend/.env when running via Docker.
 # ──────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  mongodb:
-    image: mongo:7
+  postgres:
+    image: postgres:16-alpine
     restart: unless-stopped
+    environment:
+      POSTGRES_DB: code_motion
+      POSTGRES_USER: code_motion
+      POSTGRES_PASSWORD: code_motion
+    ports:
+      - "5433:5432"   # host 5433 → container 5432. Host port is 5433, not 5432, because a
+                       # native PostgreSQL install may already own 5432 on this machine —
+                       # containers still talk to this service internally as postgres:5432,
+                       # unaffected by this. From the host (pgAdmin, psql, local alembic),
+                       # connect to localhost:5433.
     volumes:
-      - mongo_data:/data/db
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U code_motion -d code_motion"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    ports:
+      - "6379:6379"   # exposed to the host so a locally-run (non-Docker) uvicorn/Celery
+                       # process can reach it at localhost:6379 — containers still talk
+                       # to this service internally as redis:6379, unaffected by this.
 
   backend:
     build: ./backend
@@ -32,11 +47,11 @@ services:
       - "8000:8000"
     env_file: ./backend/.env
     environment:
-      MONGODB_URL: mongodb://mongodb:27017
+      DATABASE_URL: postgresql+asyncpg://code_motion:code_motion@postgres:5432/code_motion
       REDIS_URL: redis://redis:6379/0
       APP_ENV: production
     depends_on:
-      - mongodb
+      - postgres
       - redis
     volumes:
       - ./media:/app/media
@@ -53,14 +68,14 @@ services:
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
     env_file: ./backend/.env
     environment:
-      MONGODB_URL: mongodb://mongodb:27017
+      DATABASE_URL: postgresql+asyncpg://code_motion:code_motion@postgres:5432/code_motion
       REDIS_URL: redis://redis:6379/0
       APP_ENV: production
     depends_on:
-      - mongodb
+      - postgres
       - redis
     volumes:
       - ./media:/app/media
 
 volumes:
-  mongo_data:
+  postgres_data:
