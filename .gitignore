@@ -1,0 +1,45 @@
+# Single ignore file for the whole repo (backend/ and frontend/ have none).
+# A pattern without a leading "/" matches at any depth.
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
+# backend/.env, backend/.env.docker, frontend/.env.* — never commit.
+.env
+.env.*
+!.env.example
+
+# ── Generated media (rendered videos) ──────────────────────────────────────
+# repo-root media/ (Docker worker) and backend/media/ (local uvicorn)
+media/
+
+# ── Python (backend) ────────────────────────────────────────────────────────
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ── Node (frontend) ─────────────────────────────────────────────────────────
+node_modules
+dist
+dist-ssr
+*.local
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ── Editors / OS ────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db

@@ -1,6 +1,6 @@
 """Helpers shared by the async (API) and sync (Celery) repositories, so both
 apply exactly the same rules."""
-from typing import Any, Optional, Union
+from typing import Any, Iterable, Optional, Union
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -56,3 +56,26 @@ def set_video_status(video: Video, status: VideoStatus) -> None:
 
 def set_scene_status(scene: Scene, status: SceneStatus) -> None:
     scene.status = SceneStatus(status).value
+
+
+def transition_values(to_status: VideoStatus, fields: dict) -> dict:
+    """Column values for a compare-and-set status UPDATE (same rules as
+    apply_fields + set_video_status)."""
+    unknown = set(fields) - VIDEO_FIELDS
+    if unknown:
+        raise ValueError(f"Video: cannot set {sorted(unknown)}")
+    values = {
+        k: v.model_dump(mode="json") if isinstance(v, BaseModel) else v
+        for k, v in fields.items()
+    }
+    to_status = VideoStatus(to_status)
+    values["status"] = to_status.value
+    if to_status not in VIDEO_HALT_STATUSES:
+        values["current_stage"] = to_status.value
+    return values
+
+
+def status_values(from_status: Union[VideoStatus, Iterable[VideoStatus]]) -> list[str]:
+    if isinstance(from_status, (str, VideoStatus)):
+        from_status = [from_status]
+    return [VideoStatus(s).value for s in from_status]

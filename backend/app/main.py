@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +11,7 @@ from slowapi.middleware import SlowAPIMiddleware
 import os
 
 from app.api.v1.api_router import api_router
+from app.core import activity_console
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.logging import get_logger
@@ -29,7 +32,16 @@ async def lifespan(app: FastAPI):
     )
     await connect_db()
     logger.info("PostgreSQL connected")
+    console = None
+    if settings.ACTIVITY_CONSOLE_ENABLED:
+        # Prints worker / LLM / render events in this log (activity_console.py).
+        console = asyncio.create_task(activity_console.run())
+        logger.info("Activity console on — pipeline events from all processes print here")
     yield
+    if console is not None:
+        console.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await console
     await close_db()
     logger.info("PostgreSQL disconnected")
 

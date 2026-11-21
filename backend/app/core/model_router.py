@@ -23,7 +23,7 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI, RateLimitErr
 from pydantic import BaseModel, ValidationError
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential
 
-from app.core import quota, rate_limiter
+from app.core import activity, quota, rate_limiter
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.quota import QuotaExhausted
@@ -108,6 +108,11 @@ async def _attempt(
 
     event = dict(node_name=stage, video_id=video_id, scene_id=scene_id)
     input_summary = {"chars": sum(len(m["content"]) for m in messages), "models": models}
+    ids = dict(video_id=video_id, scene_id=scene_id)
+    activity.emit(
+        "llm_call", **ids, stage=stage, model=models[0],
+        fallbacks=", ".join(models[1:]) or None, prompt=f"{input_summary['chars']} chars",
+    )
     started = time.monotonic()
 
     try:
@@ -122,6 +127,7 @@ async def _attempt(
     except RateLimitError:
         latency_ms = int((time.monotonic() - started) * 1000)
         await record_event(**event, status="rate_limited", latency_ms=latency_ms, input_summary=input_summary)
+        activity.emit("llm_error", **ids, stage=stage, error="429 rate limited — will retry", took=f"{latency_ms} ms")
         # A 429 is either the per-minute limit (retry) or the daily cap (stop).
         # Re-read the real remaining count to tell which.
         await quota.ensure_quota(force_refresh=True)
@@ -132,6 +138,7 @@ async def _attempt(
             **event, status="error", latency_ms=latency_ms, input_summary=input_summary,
             output_summary={"error": f"{type(e).__name__}: {e}"[:500]},
         )
+        activity.emit("llm_error", **ids, stage=stage, error=f"{type(e).__name__}: {e}"[:500], took=f"{latency_ms} ms")
         raise
 
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -150,6 +157,10 @@ async def _attempt(
             latency_ms=latency_ms, input_summary=input_summary,
             output_summary={"finish_reason": finish_reason, "chars": len(content)},
         )
+        activity.emit(
+            "llm_error", **ids, stage=stage, model=model_used,
+            error=f"empty or truncated answer (finish_reason={finish_reason})", took=f"{latency_ms} ms",
+        )
         # These models reason before answering, and reasoning tokens count
         # toward max_tokens — an empty or cut-off answer usually means the
         # budget went on reasoning.
@@ -164,6 +175,11 @@ async def _attempt(
         output_summary={"finish_reason": finish_reason, "chars": len(content)},
     )
     logger.info("LLM stage '%s' answered by %s in %d ms", stage, model_used, latency_ms)
+    activity.emit(
+        "llm_answer", **ids, stage=stage, model=model_used, took=f"{latency_ms / 1000:.1f} s",
+        tokens=f"{tokens_in} in / {tokens_out} out" if tokens_in is not None else None,
+        answer=f"{len(content)} chars",
+    )
     return content
 
 

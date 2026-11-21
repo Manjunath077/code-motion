@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     # Ultra on a long codegen can take well over a minute.
     LLM_TIMEOUT: int = 120
 
+    # Pipeline: when the daily free quota runs out, the video waits in
+    # WAITING_QUOTA and retries this often until the quota resets.
+    PIPELINE_QUOTA_RETRY_S: int = 1800
+    # A video whose row has not changed for this long while in a pipeline
+    # stage is treated as stuck (its task was lost) and re-queued by the
+    # sweeper. Must exceed the longest stage (codegen with LLM retries).
+    PIPELINE_STALE_AFTER_S: int = 3600
+    # How often Celery beat runs the stuck-video sweeper.
+    PIPELINE_SWEEP_INTERVAL_S: int = 300
+    # Activity feed (app/core/activity.py): every process publishes pipeline
+    # events to a Redis Stream; the API prints them as blocks in its log.
+    ACTIVITY_FEED_ENABLED: bool = True
+    ACTIVITY_CONSOLE_ENABLED: bool = True
+
     # Port 5433, not 5432 — see docker-compose.yml's postgres service comment:
     # host 5432 may already be taken by a native PostgreSQL install.
     DATABASE_URL: str = "postgresql+asyncpg://code_motion:code_motion@localhost:5433/code_motion"

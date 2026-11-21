@@ -10,7 +10,7 @@ import asyncio
 import time
 import uuid
 
-from app.core import redis_client
+from app.core import activity, redis_client
 from app.core.config import settings
 from app.core.logging import get_logger
 
@@ -48,4 +48,5 @@ async def acquire() -> None:
             if wait_ms <= 0:
                 return
             logger.info("LLM rate limit reached (%d/min) — waiting %d ms", settings.LLM_RPM, wait_ms)
+            activity.emit("rate_limit_wait", limit=f"{settings.LLM_RPM}/min", wait=f"{wait_ms / 1000:.1f} s")
             await asyncio.sleep(wait_ms / 1000)

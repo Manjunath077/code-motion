@@ -1,37 +1,71 @@
 # ── What runs where ────────────────────────────────────────────────────────────
-# Postgres and Redis are NOT in this file:
-#   - Postgres: the local (native) install on the host, port 5434.
-#   - Redis:    the standalone `code-motion` container, port 6379
-#               (docker run -d --name code-motion -p 6379:6379 --restart unless-stopped redis:7-alpine)
-# Containers reach both through host.docker.internal.
+# This file is the whole container stack, shown as one "code-motion" group:
+#   redis    — Celery broker + LLM rate-limit/quota cache (data in a named volume)
+#   backend  — FastAPI (port 8000)
+#   worker   — Celery: pipeline stages + Manim renders
+#   beat     — Celery beat: schedules the stuck-video sweeper
+# Postgres is NOT here: it is the local (native) install on the host, port
+# 5434, reached from containers through host.docker.internal.
 #
 # ── How env vars work ──────────────────────────────────────────────────────────
-# env_file loads backend/.env (OPENROUTER_API_KEY, LLM_*, DATABASE_URL, ...),
-# then backend/.env.docker, which overrides only what differs inside a
-# container — the hosts. Create backend/.env.docker (gitignored) with:
+# env_file loads backend/.env (OPENROUTER_API_KEY, LLM_*, ...), then
+# backend/.env.docker, which overrides what differs inside a container.
+# Create backend/.env.docker (gitignored, values unquoted, `$` written `$$`):
 #
 #   DATABASE_URL=postgresql+asyncpg://code_motion:<password>@host.docker.internal:5434/code_motion
-#   REDIS_URL=redis://host.docker.internal:6379/0
 #
-# backend/.env keeps localhost for running uvicorn/Celery directly from the venv.
+# REDIS_URL is set below (the `redis` service name). backend/.env keeps
+# localhost for running uvicorn from the venv: Redis is published on
+# 127.0.0.1:6379 only — reachable from this machine, not from the network.
+#
+# Commands (repo root):
+#   docker compose up -d --build        everything
+#   docker compose up -d --build redis worker beat
+#                                       what a local `uvicorn --reload` needs
+#                                       (--build after every backend code change:
+#                                       the code is baked into the images)
+#   docker compose down                 stop (Redis data is kept in its volume)
 # ──────────────────────────────────────────────────────────────────────────────
+
+name: code-motion
+
+x-app-env: &app-env
+  env_file:
+    - ./backend/.env
+    - ./backend/.env.docker
+  environment:
+    APP_ENV: production
+    REDIS_URL: redis://redis:6379/0
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    redis:
+      condition: service_healthy
 
 services:
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   backend:
+    <<: *app-env
     build:
       context: ./backend
       dockerfile: Dockerfile.api
     restart: unless-stopped
     ports:
       - "8000:8000"
-    env_file:
-      - ./backend/.env
-      - ./backend/.env.docker
-    environment:
-      APP_ENV: production
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./media:/app/media
     healthcheck:
@@ -43,16 +77,24 @@ services:
       start_period: 15s
 
   worker:
+    <<: *app-env
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
     restart: unless-stopped
-    env_file:
-      - ./backend/.env
-      - ./backend/.env.docker
-    environment:
-      APP_ENV: production
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./media:/app/media
+
+  # Celery beat: the scheduler. Exactly one instance. It only enqueues the
+  # stuck-video sweeper every PIPELINE_SWEEP_INTERVAL_S; the worker runs it.
+  beat:
+    <<: *app-env
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info",
+              "--schedule", "/tmp/celerybeat-schedule"]
+
+volumes:
+  redis-data:

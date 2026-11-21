@@ -36,6 +36,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip==25.3 \
     && pip install -r requirements/worker.txt
 
-COPY . .
+# Run as an unprivileged user, never root. HOME is needed for LaTeX/Manim caches.
+RUN useradd --create-home --uid 1000 app \
+    && mkdir -p /app/media \
+    && chown -R app:app /app
+COPY --chown=app:app . .
+USER app
 
 CMD ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
