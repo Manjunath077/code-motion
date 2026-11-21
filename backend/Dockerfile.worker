@@ -25,6 +25,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Prefer IPv6 (see the comment in docker/gai.conf).
+COPY docker/gai.conf /etc/gai.conf
+
 # The pip cache lives in a BuildKit cache mount, not in the image, so a failed
 # build keeps what it already downloaded and the next build continues from there.
 # pip >= 25.1 also resumes a download interrupted mid-file (PIP_RESUME_RETRIES).
