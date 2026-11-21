@@ -1,4 +1,6 @@
-from app.core.model_router import call_llm
+from typing import Optional
+
+from app.core.model_router import call_text
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -97,12 +99,12 @@ def _enrich_prompt(user_prompt: str) -> str:
     )
 
 
-async def generate_manim_script(user_prompt: str) -> str:
-    content = await call_llm("scene_codegen", _SYSTEM_PROMPT, _enrich_prompt(user_prompt))
+async def generate_manim_script(user_prompt: str, scene_id: Optional[str] = None) -> str:
+    content = await call_text("codegen", _SYSTEM_PROMPT, _enrich_prompt(user_prompt), scene_id=scene_id)
     return _clean_script(content)
 
 
-async def fix_manim_script(broken_script: str, error: str) -> str:
+async def fix_manim_script(broken_script: str, error: str, scene_id: Optional[str] = None) -> str:
     """Send the broken script + validation error back to the LLM and ask it to fix it."""
     fix_prompt = (
         f"The Manim script below failed validation with this error:\n\n"
@@ -112,7 +114,7 @@ async def fix_manim_script(broken_script: str, error: str) -> str:
         "Return ONLY the corrected Python code with no markdown fences or explanations."
     )
     logger.info("Attempting script repair — error: %s", error[:120])
-    content = await call_llm("scene_codegen", _SYSTEM_PROMPT, fix_prompt)
+    content = await call_text("code_fix", _SYSTEM_PROMPT, fix_prompt, scene_id=scene_id)
     return _clean_script(content)
 
 

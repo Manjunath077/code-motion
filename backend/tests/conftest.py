@@ -1,5 +1,11 @@
+import os
+
 import pytest
 from unittest.mock import AsyncMock, patch
+
+# Settings requires a key; tests never reach OpenRouter, so any value works.
+# Set before anything imports app.core.config.
+os.environ.setdefault("OPENROUTER_API_KEY", "test-key")
 
 
 @pytest.fixture(autouse=True)

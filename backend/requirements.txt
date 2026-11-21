@@ -6,11 +6,11 @@ sqlalchemy>=2.0
 asyncpg
 psycopg[binary]
 alembic
-langchain
-langchain-groq
-langgraph
+# OpenRouter is OpenAI-compatible — the openai SDK pointed at OPENROUTER_BASE_URL.
+openai
+# OpenRouter /key quota check
+httpx
 tenacity
-aiolimiter
 redis
 celery[redis]
 manim
@@ -20,4 +20,5 @@ slowapi
 aiosqlite
 pytest
 pytest-asyncio
-httpx
+# test-only: in-memory Redis (with Lua for the rate limiter) — no real Redis needed
+fakeredis[lua]

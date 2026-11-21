@@ -1,5 +1,5 @@
 from unittest.mock import AsyncMock, patch
-from app.services.llm_service import _clean_script, generate_manim_script
+from app.services.llm_service import _clean_script, fix_manim_script, generate_manim_script
 
 # ── _clean_script unit tests (no network) ────────────────────────────────────
 
@@ -47,7 +47,7 @@ async def test_generate_returns_cleaned_script():
     code = "from manim import *\n\nclass S(Scene):\n    def construct(self): pass"
 
     with patch(
-        "app.services.llm_service.call_llm", new_callable=AsyncMock, return_value=f"```python\n{code}\n```"
+        "app.services.llm_service.call_text", new_callable=AsyncMock, return_value=f"```python\n{code}\n```"
     ):
         result = await generate_manim_script("animate something")
 
@@ -58,18 +58,28 @@ async def test_generate_returns_cleaned_script():
 async def test_generate_plain_response_returned_as_is():
     code = "from manim import *\n\nclass S(Scene):\n    def construct(self): pass"
 
-    with patch("app.services.llm_service.call_llm", new_callable=AsyncMock, return_value=code):
+    with patch("app.services.llm_service.call_text", new_callable=AsyncMock, return_value=code):
         result = await generate_manim_script("animate something")
 
     assert result == code
 
 
-async def test_generate_routes_through_scene_codegen_node():
-    """generate_manim_script must route through the 'scene_codegen' model-router node
-    so it picks up the Groq model assigned to that node (see app/core/model_router.py)."""
+async def test_generate_routes_through_codegen_stage():
+    """generate_manim_script must route through the 'codegen' model-router stage
+    so it picks up the model assigned to that stage (see app/core/model_router.py)."""
     code = "from manim import *\nclass S(Scene):\n    def construct(self): pass"
 
-    with patch("app.services.llm_service.call_llm", new_callable=AsyncMock, return_value=code) as mock_call:
+    with patch("app.services.llm_service.call_text", new_callable=AsyncMock, return_value=code) as mock_call:
         await generate_manim_script("test")
 
-    assert mock_call.call_args.args[0] == "scene_codegen"
+    assert mock_call.call_args.args[0] == "codegen"
+
+
+async def test_fix_routes_through_code_fix_stage():
+    code = "from manim import *\nclass S(Scene):\n    def construct(self): pass"
+
+    with patch("app.services.llm_service.call_text", new_callable=AsyncMock, return_value=code) as mock_call:
+        await fix_manim_script("broken", "SyntaxError", scene_id="abc")
+
+    assert mock_call.call_args.args[0] == "code_fix"
+    assert mock_call.call_args.kwargs["scene_id"] == "abc"

@@ -1,7 +1,7 @@
 version: "3.9"
 
 # ── How env vars work ──────────────────────────────────────────────────────────
-# env_file loads everything from backend/.env (GROQ_API_KEY, LLM_TEMPERATURE,
+# env_file loads everything from backend/.env (OPENROUTER_API_KEY, LLM_TEMPERATURE,
 # LLM_TIMEOUT, MEDIA_DIR, ALLOWED_ORIGINS, etc.)
 #
 # The environment: block below OVERRIDES specific values from that file so

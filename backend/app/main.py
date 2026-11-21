@@ -21,7 +21,12 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     if settings.APP_ENV == "development":
         logger.warning("Running in DEVELOPMENT mode — do not use in production")
-    logger.info("Groq API key loaded: %s", "yes" if settings.GROQ_API_KEY else "NO")
+    logger.info("OpenRouter API key loaded: %s", "yes" if settings.OPENROUTER_API_KEY else "NO")
+    # Settings already refused to load if any of these lacks ':free'.
+    logger.info(
+        "LLM models (free only): ultra=%s vl=%s lightning=%s",
+        settings.MODEL_ULTRA, settings.MODEL_VL, settings.MODEL_LIGHTNING,
+    )
     await connect_db()
     logger.info("PostgreSQL connected")
     yield
