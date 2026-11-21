@@ -11,9 +11,9 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Phase 0 keeps a strict one-Scene-per-Video pairing (see PHASE_0_PLAN.md decision
-# #1) so the existing flat SceneDocument API shape needs no changes. This ends in
-# Phase 3 once the storyboard step introduces multiple scenes per video.
+# Temporary: a strict one-Scene-per-Video pairing so the existing flat
+# SceneDocument API shape needs no changes. This ends in NEW_PLAN.md step 4,
+# when the repositories are split and video/scene statuses are decoupled.
 
 _SCENE_FIELD_MAP = {
     "generated_script": "generated_script",

@@ -1,4 +1,4 @@
-"""Groq free-tier model routing (see PRODUCTION_PLAN.md Section 2).
+"""Groq free-tier model routing (temporary — rewritten for OpenRouter in NEW_PLAN.md step 2).
 
 Every LLM call in the app goes through `call_llm(node_name, ...)`. Which Groq
 model handles a given pipeline node is decided here, once, in `NODE_MODEL_MAP`
@@ -20,8 +20,8 @@ NODE_MODEL_MAP: dict[str, str] = {
     "scene_codegen": "openai/gpt-oss-20b",
 }
 
-# Free-tier RPM per model is documented at 30/min (see PRODUCTION_PLAN.md
-# Section 2) — stay a little under that rather than racing the exact cap.
+# Groq free-tier RPM per model is documented at 30/min — stay a little under
+# that rather than racing the exact cap.
 _RATE_LIMIT_RPM = 28
 
 _limiters: dict[str, AsyncLimiter] = {}
