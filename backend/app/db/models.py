@@ -28,8 +28,17 @@ class Video(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
     user_prompt: Mapped[str] = mapped_column(sa.Text, nullable=False)
     title: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
-    status: Mapped[str] = mapped_column(sa.String(32), nullable=False)
-    script: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
+    # Values: app.schemas.status.VideoStatus. current_stage is the last pipeline
+    # stage entered; it is kept when status becomes FAILED / WAITING_QUOTA so the
+    # runner can resume from there.
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="created")
+    current_stage: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+    review_mode: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # Stage artifacts (app.schemas.artifacts): Spec, Outline, Trace.
+    spec: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
+    outline: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
+    storyboard_version: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     verified_trace: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
     style_guide: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
     final_video_url: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
@@ -41,7 +50,9 @@ class Video(Base):
         sa.DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
     )
 
-    scenes: Mapped[list["Scene"]] = relationship(back_populates="video", cascade="all, delete-orphan")
+    scenes: Mapped[list["Scene"]] = relationship(
+        back_populates="video", cascade="all, delete-orphan", order_by="Scene.order"
+    )
 
 
 class Scene(Base):
@@ -58,7 +69,16 @@ class Scene(Base):
     narration_duration_seconds: Mapped[Optional[float]] = mapped_column(sa.Numeric, nullable=True)
     visual_description: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     generated_script: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
-    status: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    # Values: app.schemas.status.SceneStatus. Independent of Video.status.
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="pending")
+    # app.schemas.artifacts.Storyboard: beats, bookmarks, start/end state, layout zones.
+    storyboard: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
+    # app.schemas.artifacts.QAReport
+    qa_report: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
+    # Cache keys: skip re-running TTS / render when the input did not change.
+    audio_hash: Mapped[Optional[str]] = mapped_column(sa.String(64), nullable=True)
+    code_hash: Mapped[Optional[str]] = mapped_column(sa.String(64), nullable=True)
+    preview_url: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     rendered_segment_url: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), default=_now, nullable=False)
@@ -78,6 +98,11 @@ class SceneAttempt(Base):
         Uuid(as_uuid=True), ForeignKey("scenes.id", ondelete="CASCADE"), nullable=False
     )
     attempt_number: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    # Which step made this attempt: "codegen", "code_fix", "regenerate", "fallback".
+    stage: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+    # Classified failure of this attempt: "api", "latex", "logic", "timeout", ...
+    error_class: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+    critic_feedback: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
     generated_script: Mapped[str] = mapped_column(sa.Text, nullable=False)
     validation_result: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
     reviewer_feedback: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)

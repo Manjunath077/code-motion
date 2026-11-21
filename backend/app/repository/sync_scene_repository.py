@@ -1,83 +1,46 @@
-from datetime import datetime, timezone
+"""Scenes (sync, for Celery workers). Same rules as scene_repository."""
 from typing import Optional
-from uuid import UUID
 
-from app.db.models import Scene, Video
-from app.db.sync_session import SessionLocal
-from app.schemas.scene_schema import SceneDocument, SceneStatus
 from app.core.logging import get_logger
+from app.db.models import Scene
+from app.db.sync_session import SessionLocal
+from app.repository._common import SCENE_FIELDS, IdLike, apply_fields, as_uuid, set_scene_status
+from app.schemas.api import SceneOut
+from app.schemas.status import SceneStatus
 
 logger = get_logger(__name__)
 
 
-def _row_to_scene(video: Video, scene: Scene) -> SceneDocument:
-    return SceneDocument(
-        id=str(scene.id),
-        prompt=video.user_prompt,
-        generated_script=scene.generated_script,
-        status=SceneStatus(scene.status),
-        video_url=scene.rendered_segment_url,
-        error_message=scene.error_message,
-        created_at=video.created_at,
-        updated_at=scene.updated_at,
-    )
-
-
-def get_scene_by_id_sync(scene_id: str) -> Optional[SceneDocument]:
-    try:
-        s_id = UUID(scene_id)
-    except ValueError:
+def get_scene_sync(scene_id: IdLike) -> Optional[SceneOut]:
+    s_id = as_uuid(scene_id)
+    if s_id is None:
         return None
-
     with SessionLocal() as session:
         scene = session.get(Scene, s_id)
-        if scene is None:
-            return None
-        video = session.get(Video, scene.video_id)
-        if video is None:
-            return None
-        return _row_to_scene(video, scene)
+        return SceneOut.model_validate(scene) if scene else None
 
 
-def update_scene_status_sync(scene_id: str, status: SceneStatus, **kwargs) -> None:
-    try:
-        s_id = UUID(scene_id)
-    except ValueError:
-        return
+def update_scene_status_sync(scene_id: IdLike, status: SceneStatus, **fields) -> bool:
+    found = _update(scene_id, status, fields)
+    if found:
+        logger.info("Scene %s status → %s", scene_id, SceneStatus(status).value)
+    return found
 
+
+def update_scene_sync(scene_id: IdLike, **fields) -> bool:
+    return _update(scene_id, None, fields)
+
+
+def _update(scene_id: IdLike, status: Optional[SceneStatus], fields: dict) -> bool:
+    s_id = as_uuid(scene_id)
+    if s_id is None:
+        return False
     with SessionLocal() as session:
-        scene = session.get(Scene, s_id)
-        if scene is None:
-            return
-
-        now = datetime.now(timezone.utc)
-        scene.status = status.value
-        scene.updated_at = now
-        if "error_message" in kwargs:
-            scene.error_message = kwargs["error_message"]
-
-        video = session.get(Video, scene.video_id)
-        if video is not None:
-            video.status = status.value
-            video.updated_at = now
-            if "error_message" in kwargs:
-                video.error_message = kwargs["error_message"]
-
-        session.commit()
-
-    logger.info("Scene %s status → %s", scene_id, status)
-
-
-def update_scene_video_sync(scene_id: str, video_url: str) -> None:
-    try:
-        s_id = UUID(scene_id)
-    except ValueError:
-        return
-
-    with SessionLocal() as session:
-        scene = session.get(Scene, s_id)
-        if scene is None:
-            return
-        scene.rendered_segment_url = video_url
-        scene.updated_at = datetime.now(timezone.utc)
-        session.commit()
+        with session.begin():
+            scene = session.get(Scene, s_id)
+            if scene is None:
+                return False
+            apply_fields(scene, fields, SCENE_FIELDS)
+            if status is not None:
+                set_scene_status(scene, status)
+    return True

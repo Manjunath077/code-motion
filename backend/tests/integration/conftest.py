@@ -1,27 +1,44 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.main import app
-from app.schemas.scene_schema import SceneStatus
+from app.schemas.api import SceneOut, VideoOut
+from app.schemas.status import SceneStatus, VideoStatus
 
 
-def make_scene(status=SceneStatus.QUEUED, **kwargs):
-    from app.schemas.scene_schema import SceneDocument
+def make_scene(status=SceneStatus.APPROVED, **kwargs) -> SceneOut:
+    now = datetime.now(timezone.utc)
     defaults = dict(
-        id=str(uuid4()),
-        prompt="test prompt",
-        generated_script="from manim import *\nclass S(Scene):\n    def construct(self): pass",
+        id=uuid4(),
+        video_id=uuid4(),
+        order=0,
         status=status,
-        video_url=None,
-        error_message=None,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        generated_script="from manim import *\nclass S(Scene):\n    def construct(self): pass",
+        created_at=now,
+        updated_at=now,
     )
     defaults.update(kwargs)
-    return SceneDocument(**defaults)
+    return SceneOut(**defaults)
+
+
+def make_video(status=VideoStatus.CREATED, scenes=None, **kwargs) -> VideoOut:
+    now = datetime.now(timezone.utc)
+    defaults = dict(
+        id=uuid4(),
+        user_prompt="test prompt",
+        status=status,
+        current_stage=status,
+        review_mode=True,
+        storyboard_version=0,
+        created_at=now,
+        updated_at=now,
+        scenes=scenes or [],
+    )
+    defaults.update(kwargs)
+    return VideoOut(**defaults)
 
 
 @pytest.fixture

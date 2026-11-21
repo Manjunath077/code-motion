@@ -1,22 +1,11 @@
-from typing import Optional, Union
-from uuid import UUID
+from typing import Optional
 
 from app.db.models import PipelineEvent, Scene
 from app.db.session import AsyncSessionLocal
 from app.core.logging import get_logger
+from app.repository._common import IdLike, as_uuid
 
 logger = get_logger(__name__)
-
-IdLike = Union[str, UUID, None]
-
-
-def _as_uuid(value: IdLike) -> Optional[UUID]:
-    if value is None or isinstance(value, UUID):
-        return value
-    try:
-        return UUID(value)
-    except ValueError:
-        return None
 
 
 async def record_event(
@@ -38,7 +27,7 @@ async def record_event(
     video_id is NOT NULL in the table; if only scene_id is given it is looked
     up from the scene. With neither, there is nothing to attach the row to,
     so it is skipped."""
-    v_id, s_id = _as_uuid(video_id), _as_uuid(scene_id)
+    v_id, s_id = as_uuid(video_id), as_uuid(scene_id)
     if v_id is None and s_id is None:
         return
 

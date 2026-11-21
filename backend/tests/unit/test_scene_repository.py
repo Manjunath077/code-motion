@@ -1,156 +1,148 @@
 import uuid
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.repository.scene_repository as repo
-from app.db.base import Base
-from app.db import models  # noqa: F401 — registers tables on Base.metadata
-from app.schemas.scene_schema import SceneStatus
-
-# These tests run against a real (in-memory) SQLite database rather than mocks,
-# since faking SQLAlchemy's query layer convincingly is more fragile than just
-# exercising the repository against a throwaway schema — no external service
-# involved, so this still satisfies "unit: no external dependencies".
+import app.repository.video_repository as video_repo
+from app.schemas.artifacts import SceneBeat, Storyboard, Zone
+from app.schemas.status import SceneStatus, VideoStatus
 
 
 @pytest.fixture
-async def session_factory(monkeypatch):
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    monkeypatch.setattr(repo, "AsyncSessionLocal", factory)
-
-    yield factory
-
-    await engine.dispose()
+async def video(db):
+    return await video_repo.create_video("explain heap sort")
 
 
-# ── create_scene ──────────────────────────────────────────────────────────────
+# ── create / get ──────────────────────────────────────────────────────────────
 
-async def test_create_scene_returns_scene_document(session_factory):
-    scene = await repo.create_scene("test prompt")
+async def test_create_scene_defaults(video):
+    scene = await repo.create_scene(video.id, order=2)
 
-    assert scene.prompt == "test prompt"
+    assert scene.video_id == video.id
+    assert scene.order == 2
     assert scene.status == SceneStatus.PENDING
     assert scene.generated_script is None
-    uuid.UUID(scene.id)  # doesn't raise
 
 
-# ── get_scene_by_id ───────────────────────────────────────────────────────────
+async def test_create_scene_unknown_video_returns_none(db):
+    assert await repo.create_scene(uuid.uuid4()) is None
 
-async def test_get_scene_by_id_found(session_factory):
-    created = await repo.create_scene("test prompt")
 
-    fetched = await repo.get_scene_by_id(created.id)
+async def test_get_scene_found(video):
+    created = await repo.create_scene(video.id)
 
-    assert fetched is not None
+    fetched = await repo.get_scene(str(created.id))
+
     assert fetched.id == created.id
-    assert fetched.prompt == "test prompt"
 
 
-async def test_get_scene_by_id_not_found_returns_none(session_factory):
-    scene = await repo.get_scene_by_id(str(uuid.uuid4()))
-    assert scene is None
+@pytest.mark.parametrize("bad_id", [str(uuid.uuid4()), "not-a-valid-uuid"])
+async def test_get_scene_missing_returns_none(db, bad_id):
+    assert await repo.get_scene(bad_id) is None
 
 
-async def test_get_scene_by_id_invalid_id_returns_none(session_factory):
-    scene = await repo.get_scene_by_id("not-a-valid-uuid")
-    assert scene is None
+# ── list ──────────────────────────────────────────────────────────────────────
 
+async def test_list_scenes_of_one_video_in_order(video):
+    other = await video_repo.create_video("other")
+    await repo.create_scene(video.id, order=1)
+    await repo.create_scene(video.id, order=0)
+    await repo.create_scene(other.id)
 
-# ── update_scene_status ───────────────────────────────────────────────────────
+    scenes, total = await repo.list_scenes(video.id)
 
-async def test_update_scene_status_updates_status(session_factory):
-    created = await repo.create_scene("test prompt")
-
-    await repo.update_scene_status(created.id, SceneStatus.COMPLETED)
-
-    fetched = await repo.get_scene_by_id(created.id)
-    assert fetched.status == SceneStatus.COMPLETED
-
-
-async def test_update_scene_status_with_error_message(session_factory):
-    created = await repo.create_scene("test prompt")
-
-    await repo.update_scene_status(created.id, SceneStatus.FAILED, error_message="boom")
-
-    fetched = await repo.get_scene_by_id(created.id)
-    assert fetched.status == SceneStatus.FAILED
-    assert fetched.error_message == "boom"
-
-
-async def test_update_scene_status_unknown_id_is_a_noop(session_factory):
-    # Should not raise even though nothing exists with this id.
-    await repo.update_scene_status(str(uuid.uuid4()), SceneStatus.FAILED, error_message="boom")
-
-
-# ── update_scene_script / update_scene_video ─────────────────────────────────
-
-async def test_update_scene_script_persists_script(session_factory):
-    created = await repo.create_scene("test prompt")
-
-    await repo.update_scene_script(created.id, "from manim import *")
-
-    fetched = await repo.get_scene_by_id(created.id)
-    assert fetched.generated_script == "from manim import *"
-
-
-async def test_update_scene_video_persists_video_url(session_factory):
-    created = await repo.create_scene("test prompt")
-
-    await repo.update_scene_video(created.id, "/media/abc/output.mp4")
-
-    fetched = await repo.get_scene_by_id(created.id)
-    assert fetched.video_url == "/media/abc/output.mp4"
-
-
-# ── delete_scene ──────────────────────────────────────────────────────────────
-
-async def test_delete_scene_returns_true_when_deleted(session_factory):
-    created = await repo.create_scene("test prompt")
-
-    result = await repo.delete_scene(created.id)
-
-    assert result is True
-    assert await repo.get_scene_by_id(created.id) is None
-
-
-async def test_delete_scene_returns_false_when_not_found(session_factory):
-    result = await repo.delete_scene(str(uuid.uuid4()))
-    assert result is False
-
-
-async def test_delete_scene_invalid_id_returns_false(session_factory):
-    result = await repo.delete_scene("bad-id")
-    assert result is False
-
-
-# ── list_scenes ───────────────────────────────────────────────────────────────
-
-async def test_list_scenes_returns_list_and_total(session_factory):
-    await repo.create_scene("first")
-    await repo.create_scene("second")
-
-    scenes, total = await repo.list_scenes(limit=20, skip=0)
-
-    assert len(scenes) == 2
+    assert [s.order for s in scenes] == [0, 1]
     assert total == 2
 
 
-async def test_list_scenes_empty(session_factory):
-    scenes, total = await repo.list_scenes()
-    assert scenes == []
-    assert total == 0
-
-
-async def test_list_scenes_respects_limit(session_factory):
+async def test_list_all_scenes_respects_limit(video):
     for i in range(3):
-        await repo.create_scene(f"prompt {i}")
+        await repo.create_scene(video.id, order=i)
 
-    scenes, total = await repo.list_scenes(limit=2, skip=0)
+    scenes, total = await repo.list_scenes(limit=2)
 
     assert len(scenes) == 2
     assert total == 3
+
+
+async def test_list_scenes_empty(db):
+    assert await repo.list_scenes() == ([], 0)
+
+
+# ── status: decoupled from the video ──────────────────────────────────────────
+
+async def test_scene_status_does_not_change_video_status(video):
+    """The old repository overwrote video.status on every scene update."""
+    scene = await repo.create_scene(video.id)
+    await video_repo.update_video_status(video.id, VideoStatus.QA)
+
+    await repo.update_scene_status(scene.id, SceneStatus.FAILED, error_message="boom")
+
+    fetched_scene = await repo.get_scene(scene.id)
+    fetched_video = await video_repo.get_video(video.id)
+    assert fetched_scene.status == SceneStatus.FAILED
+    assert fetched_scene.error_message == "boom"
+    assert fetched_video.status == VideoStatus.QA
+    assert fetched_video.error_message is None
+
+
+async def test_update_scene_status_with_fields(video):
+    scene = await repo.create_scene(video.id)
+
+    await repo.update_scene_status(
+        scene.id, SceneStatus.RENDERED, rendered_segment_url="/media/v/scenes/s.mp4"
+    )
+
+    fetched = await repo.get_scene(scene.id)
+    assert fetched.status == SceneStatus.RENDERED
+    assert fetched.rendered_segment_url == "/media/v/scenes/s.mp4"
+
+
+async def test_update_scene_status_unknown_id_returns_false(db):
+    assert await repo.update_scene_status(str(uuid.uuid4()), SceneStatus.FAILED) is False
+
+
+async def test_invalid_scene_status_raises(video):
+    scene = await repo.create_scene(video.id)
+    with pytest.raises(ValueError):
+        await repo.update_scene_status(scene.id, "queued")
+
+
+# ── fields ────────────────────────────────────────────────────────────────────
+
+async def test_update_scene_stores_storyboard(video):
+    scene = await repo.create_scene(video.id)
+    storyboard = Storyboard(
+        id="S4", duration_s=45,
+        start_state="array top, tree bottom", end_state="node 4 settled at index 3",
+        beats=[SceneBeat(narration="Compare it with both children.", visual="pulse children", trace_ref=[12])],
+        layout={"array": Zone.TOP, "tree": Zone.CENTER},
+    )
+
+    await repo.update_scene(scene.id, storyboard=storyboard, generated_script="from manim import *")
+
+    fetched = await repo.get_scene(scene.id)
+    assert fetched.storyboard == storyboard
+    assert fetched.generated_script == "from manim import *"
+
+
+async def test_update_scene_rejects_unknown_fields(video):
+    scene = await repo.create_scene(video.id)
+    with pytest.raises(ValueError):
+        await repo.update_scene(scene.id, status="rendered")
+
+
+# ── delete ────────────────────────────────────────────────────────────────────
+
+async def test_delete_scene_keeps_video(video):
+    scene = await repo.create_scene(video.id)
+
+    assert await repo.delete_scene(scene.id) is True
+
+    assert await repo.get_scene(scene.id) is None
+    assert await video_repo.get_video(video.id) is not None
+
+
+@pytest.mark.parametrize("bad_id", [str(uuid.uuid4()), "bad-id"])
+async def test_delete_scene_missing_returns_false(db, bad_id):
+    assert await repo.delete_scene(bad_id) is False

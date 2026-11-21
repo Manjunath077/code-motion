@@ -4,35 +4,44 @@ import tempfile
 from pathlib import Path
 
 from app.workers.celery_app import celery_app
-from app.repository.sync_scene_repository import (
-    get_scene_by_id_sync,
-    update_scene_status_sync,
-    update_scene_video_sync,
-)
-from app.schemas.scene_schema import SceneStatus
+from app.repository.sync_scene_repository import get_scene_sync, update_scene_status_sync
+from app.repository.sync_video_repository import update_video_status_sync
+from app.schemas.status import SceneStatus, VideoStatus
 from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+def scene_media_path(video_id: str, scene_id: str) -> tuple[Path, str]:
+    """(file on disk, public URL) — media/{video_id}/scenes/{scene_id}.mp4."""
+    relative = f"{video_id}/scenes/{scene_id}.mp4"
+    return Path(settings.MEDIA_DIR) / relative, f"/media/{relative}"
+
+
 @celery_app.task(bind=True, name="render_scene", max_retries=1)
 def render_scene(self, scene_id: str):
     logger.info("Render task started for scene %s", scene_id)
-    update_scene_status_sync(scene_id, SceneStatus.RENDERING)
 
-    scene = get_scene_by_id_sync(scene_id)
-    if not scene or not scene.generated_script:
-        update_scene_status_sync(
-            scene_id, SceneStatus.FAILED, error_message="Scene or script not found"
-        )
+    scene = get_scene_sync(scene_id)
+    if not scene:
+        logger.error("Scene %s not found", scene_id)
+        return
+    video_id = str(scene.video_id)
+
+    def fail(message: str) -> None:
+        update_scene_status_sync(scene_id, SceneStatus.FAILED, error_message=message)
+        update_video_status_sync(video_id, VideoStatus.FAILED, error_message=message)
+
+    if not scene.generated_script:
+        fail("Scene has no script")
         return
 
     tmp_root = Path(tempfile.mkdtemp())
     scene_dir = tmp_root / scene_id
     scene_dir.mkdir(parents=True, exist_ok=True)
     script_path = scene_dir / "scene.py"
-    script_path.write_text(scene.generated_script)
+    script_path.write_text(scene.generated_script, encoding="utf-8")
     manim_media_dir = scene_dir / "media"
 
     try:
@@ -54,25 +63,22 @@ def render_scene(self, scene_id: str):
         if not video_files:
             raise RuntimeError("Manim produced no .mp4 output")
 
-        dest_dir = Path(settings.MEDIA_DIR) / scene_id
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        final_path = dest_dir / "output.mp4"
+        final_path, video_url = scene_media_path(video_id, scene_id)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(video_files[0]), str(final_path))
 
-        video_url = f"/media/{scene_id}/output.mp4"
-        update_scene_video_sync(scene_id, video_url)
-        update_scene_status_sync(scene_id, SceneStatus.COMPLETED)
+        update_scene_status_sync(scene_id, SceneStatus.RENDERED, rendered_segment_url=video_url)
+        # Single-scene interim flow: the scene is the whole video.
+        update_video_status_sync(video_id, VideoStatus.COMPLETED, final_video_url=video_url)
         logger.info("Scene %s rendered successfully → %s", scene_id, video_url)
 
     except subprocess.TimeoutExpired:
-        msg = "Rendering timed out after 120 seconds"
-        update_scene_status_sync(scene_id, SceneStatus.FAILED, error_message=msg)
+        fail("Rendering timed out after 120 seconds")
         logger.error("Scene %s timed out", scene_id)
 
     except Exception as e:
-        msg = str(e)
-        update_scene_status_sync(scene_id, SceneStatus.FAILED, error_message=msg)
-        logger.error("Scene %s render failed: %s", scene_id, msg)
+        fail(str(e))
+        logger.error("Scene %s render failed: %s", scene_id, e)
 
     finally:
         shutil.rmtree(str(tmp_root), ignore_errors=True)

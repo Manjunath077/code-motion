@@ -1,170 +1,103 @@
-from datetime import datetime, timezone
+"""Scenes (async, for the API). Changing a scene's status never changes its
+video's status: the pipeline sets each one explicitly."""
 from typing import Optional
-from uuid import UUID
 
 from sqlalchemy import func, select
 
+from app.core.logging import get_logger
 from app.db.models import Scene, Video
 from app.db.session import AsyncSessionLocal
-from app.schemas.scene_schema import SceneDocument, SceneStatus
-from app.core.logging import get_logger
+from app.repository._common import SCENE_FIELDS, IdLike, apply_fields, as_uuid, set_scene_status
+from app.schemas.api import SceneOut
+from app.schemas.status import SceneStatus
 
 logger = get_logger(__name__)
 
-# Temporary: a strict one-Scene-per-Video pairing so the existing flat
-# SceneDocument API shape needs no changes. This ends in NEW_PLAN.md step 4,
-# when the repositories are split and video/scene statuses are decoupled.
 
-_SCENE_FIELD_MAP = {
-    "generated_script": "generated_script",
-    "video_url": "rendered_segment_url",
-    "error_message": "error_message",
-}
-
-
-def _row_to_scene(video: Video, scene: Scene) -> SceneDocument:
-    return SceneDocument(
-        id=str(scene.id),
-        prompt=video.user_prompt,
-        generated_script=scene.generated_script,
-        status=SceneStatus(scene.status),
-        video_url=scene.rendered_segment_url,
-        error_message=scene.error_message,
-        created_at=video.created_at,
-        updated_at=scene.updated_at,
-    )
-
-
-async def create_scene(prompt: str) -> SceneDocument:
-    now = datetime.now(timezone.utc)
+async def create_scene(video_id: IdLike, *, order: int = 0, **fields) -> Optional[SceneOut]:
+    """New PENDING scene under a video. None if the video does not exist."""
+    v_id = as_uuid(video_id)
+    if v_id is None:
+        return None
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            video = Video(user_prompt=prompt, status=SceneStatus.PENDING.value, created_at=now, updated_at=now)
-            session.add(video)
-            await session.flush()
-
-            scene = Scene(
-                video_id=video.id,
-                order=0,
-                status=SceneStatus.PENDING.value,
-                created_at=now,
-                updated_at=now,
-            )
+            if await session.get(Video, v_id) is None:
+                return None
+            scene = Scene(video_id=v_id, order=order)
+            apply_fields(scene, fields, SCENE_FIELDS)
+            set_scene_status(scene, SceneStatus.PENDING)
             session.add(scene)
-            await session.flush()
-
-        logger.info("Scene created: %s", scene.id)
-        return _row_to_scene(video, scene)
+        logger.info("Scene created: %s (video %s)", scene.id, v_id)
+        return SceneOut.model_validate(scene)
 
 
-async def get_scene_by_id(scene_id: str) -> Optional[SceneDocument]:
-    try:
-        s_id = UUID(scene_id)
-    except ValueError:
+async def get_scene(scene_id: IdLike) -> Optional[SceneOut]:
+    s_id = as_uuid(scene_id)
+    if s_id is None:
         return None
+    async with AsyncSessionLocal() as session:
+        scene = await session.get(Scene, s_id)
+        return SceneOut.model_validate(scene) if scene else None
+
+
+async def list_scenes(
+    video_id: IdLike = None, limit: int = 20, skip: int = 0
+) -> tuple[list[SceneOut], int]:
+    """Scenes of one video in order, or all scenes newest first."""
+    query = select(Scene)
+    count = select(func.count()).select_from(Scene)
+    if video_id is not None:
+        v_id = as_uuid(video_id)
+        if v_id is None:
+            return [], 0
+        query = query.where(Scene.video_id == v_id).order_by(Scene.order)
+        count = count.where(Scene.video_id == v_id)
+    else:
+        query = query.order_by(Scene.created_at.desc())
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Scene, Video).join(Video, Scene.video_id == Video.id).where(Scene.id == s_id)
-        )
-        row = result.first()
-
-    if row is None:
-        return None
-    scene, video = row
-    return _row_to_scene(video, scene)
+        total = await session.scalar(count)
+        scenes = (await session.scalars(query.offset(skip).limit(limit))).all()
+        return [SceneOut.model_validate(s) for s in scenes], total or 0
 
 
-async def list_scenes(limit: int = 20, skip: int = 0) -> tuple[list[SceneDocument], int]:
-    async with AsyncSessionLocal() as session:
-        total = await session.scalar(select(func.count()).select_from(Video))
-        result = await session.execute(
-            select(Scene, Video)
-            .join(Video, Scene.video_id == Video.id)
-            .order_by(Video.created_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
-        rows = result.all()
-
-    scenes = [_row_to_scene(video, scene) for scene, video in rows]
-    return scenes, total or 0
+async def update_scene_status(scene_id: IdLike, status: SceneStatus, **fields) -> bool:
+    """Set the scene's status (and optionally other fields). False if not found."""
+    found = await _update(scene_id, status, fields)
+    if found:
+        logger.info("Scene %s status → %s", scene_id, SceneStatus(status).value)
+    return found
 
 
-async def update_scene_status(scene_id: str, status: SceneStatus, **kwargs) -> None:
-    try:
-        s_id = UUID(scene_id)
-    except ValueError:
-        return
-
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            scene = await session.get(Scene, s_id)
-            if scene is None:
-                return
-
-            now = datetime.now(timezone.utc)
-            scene.status = status.value
-            scene.updated_at = now
-            for key, value in kwargs.items():
-                setattr(scene, _SCENE_FIELD_MAP.get(key, key), value)
-
-            video = await session.get(Video, scene.video_id)
-            if video is not None:
-                video.status = status.value
-                video.updated_at = now
-                if "error_message" in kwargs:
-                    video.error_message = kwargs["error_message"]
-
-    logger.info("Scene %s status → %s", scene_id, status)
+async def update_scene(scene_id: IdLike, **fields) -> bool:
+    """Set fields other than status. False if not found."""
+    return await _update(scene_id, None, fields)
 
 
-async def delete_scene(scene_id: str) -> bool:
-    try:
-        s_id = UUID(scene_id)
-    except ValueError:
+async def delete_scene(scene_id: IdLike) -> bool:
+    """Delete one scene (and its attempts). The video is kept."""
+    s_id = as_uuid(scene_id)
+    if s_id is None:
         return False
-
     async with AsyncSessionLocal() as session:
         async with session.begin():
             scene = await session.get(Scene, s_id)
             if scene is None:
                 return False
-
-            video = await session.get(Video, scene.video_id)
-            if video is not None:
-                await session.delete(video)  # cascades to the scene row
-            else:
-                await session.delete(scene)
-
+            await session.delete(scene)
     return True
 
 
-async def update_scene_script(scene_id: str, script: str) -> None:
-    try:
-        s_id = UUID(scene_id)
-    except ValueError:
-        return
-
+async def _update(scene_id: IdLike, status: Optional[SceneStatus], fields: dict) -> bool:
+    s_id = as_uuid(scene_id)
+    if s_id is None:
+        return False
     async with AsyncSessionLocal() as session:
         async with session.begin():
             scene = await session.get(Scene, s_id)
             if scene is None:
-                return
-            scene.generated_script = script
-            scene.updated_at = datetime.now(timezone.utc)
-
-
-async def update_scene_video(scene_id: str, video_url: str) -> None:
-    try:
-        s_id = UUID(scene_id)
-    except ValueError:
-        return
-
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            scene = await session.get(Scene, s_id)
-            if scene is None:
-                return
-            scene.rendered_segment_url = video_url
-            scene.updated_at = datetime.now(timezone.utc)
+                return False
+            apply_fields(scene, fields, SCENE_FIELDS)
+            if status is not None:
+                set_scene_status(scene, status)
+    return True
