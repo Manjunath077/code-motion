@@ -1,24 +1,3 @@
-fastapi
-uvicorn[standard]
-pydantic-settings
-python-dotenv
-sqlalchemy>=2.0
-asyncpg
-psycopg[binary]
-alembic
-# OpenRouter is OpenAI-compatible — the openai SDK pointed at OPENROUTER_BASE_URL.
-openai
-# OpenRouter /key quota check
-httpx
-tenacity
-redis
-celery[redis]
-manim
-slowapi
-
-# test-only: in-memory SQLite for repository unit tests (no real DB needed)
-aiosqlite
-pytest
-pytest-asyncio
-# test-only: in-memory Redis (with Lua for the rate limiter) — no real Redis needed
-fakeredis[lua]
+# Local development install. Images use requirements/base.txt (API) and
+# requirements/worker.txt (worker) directly.
+-r requirements/dev.txt

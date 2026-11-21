@@ -1,0 +1,19 @@
+# Shared by the API and worker images. Exact pins: an unpinned upgrade can
+# silently change behaviour (see NEW_PLAN.md Section 5.I).
+fastapi==0.162.5
+uvicorn[standard]==0.54.0
+pydantic==2.14.4
+pydantic-settings==2.15.0
+python-dotenv==1.2.4
+sqlalchemy==2.0.58
+asyncpg==0.32.0
+psycopg[binary]==3.3.9
+alembic==1.20.1
+# OpenRouter is OpenAI-compatible — the openai SDK pointed at OPENROUTER_BASE_URL.
+openai==3.57.0
+# OpenRouter /key quota check
+httpx==0.28.1
+tenacity==9.2.1
+redis==8.1.0
+celery[redis]==5.7.0
+slowapi==0.1.10

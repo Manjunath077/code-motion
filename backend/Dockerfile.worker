@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+# Worker image — Celery + the Manim render toolchain.
+# Kokoro TTS weights (step 12) and motion_lib (step 8) are added in their own steps.
+FROM python:3.11-slim-bookworm
+
+# System dependencies for Manim (Cairo, Pango, FFmpeg, LaTeX)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libpangocairo-1.0-0 \
+    pkg-config \
+    python3-dev \
+    build-essential \
+    texlive \
+    texlive-latex-extra \
+    dvisvgm \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10 \
+    PIP_RESUME_RETRIES=10
+
+WORKDIR /app
+
+# The pip cache lives in a BuildKit cache mount, not in the image, so a failed
+# build keeps what it already downloaded and the next build continues from there.
+# pip >= 25.1 also resumes a download interrupted mid-file (PIP_RESUME_RETRIES).
+COPY requirements/ requirements/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip==25.3 \
+    && pip install -r requirements/worker.txt
+
+COPY . .
+
+CMD ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=2"]

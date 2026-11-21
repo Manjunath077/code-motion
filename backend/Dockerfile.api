@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+# API image — FastAPI only. No Manim, LaTeX or ffmpeg: the API never renders,
+# so it stays a few hundred MB instead of several GB.
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10 \
+    PIP_RESUME_RETRIES=10
+
+WORKDIR /app
+
+# The pip cache lives in a BuildKit cache mount, not in the image, so a failed
+# build keeps what it already downloaded and the next build continues from there.
+# pip >= 25.1 also resumes a download interrupted mid-file (PIP_RESUME_RETRIES).
+COPY requirements/ requirements/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip==25.3 \
+    && pip install -r requirements/base.txt
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

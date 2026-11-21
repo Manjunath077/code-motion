@@ -21,15 +21,26 @@ Prompt → 3Blue1Brown-style narrated explainer video (target: 5 minutes), built
 ## Repo layout
 
 - `backend/` — FastAPI app (`app/`), Celery workers (`app/workers/`), Postgres + Alembic (`alembic/`), tests (`tests/`).
+- `backend/requirements/` — exact pins: `base.txt` (API image), `worker.txt` (+ manim, worker image), `dev.txt` (+ test tools, local venv).
+- `backend/Dockerfile.api` (slim, no Manim) and `backend/Dockerfile.worker` (Manim, LaTeX, ffmpeg).
 - `frontend/` — React + Vite + TypeScript.
-- `docker-compose.yml` — `postgres` (host port 5433), `redis` (6379), `backend` (8000), `worker`.
+- `docker-compose.yml` — `backend` (8000) and `worker` only.
+
+## Local services
+
+- **Python 3.11** — venv at `backend/venv` (gitignored). Never install packages globally.
+- **Postgres** — local native install, port **5434**, database and role `code_motion` (managed in pgAdmin).
+- **Redis** — Docker container named `code-motion`, port 6379: `docker start code-motion`.
+- `backend/.env` holds secrets and uses `localhost`. Containers additionally load `backend/.env.docker`, which overrides `DATABASE_URL`/`REDIS_URL` with `host.docker.internal` (see the comment in `docker-compose.yml`). Both files are gitignored.
 
 ## Commands
 
 Backend (run from `backend/`):
 
 ```
-pip install -r requirements.txt
+py -3.11 -m venv venv              # once
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt    # = requirements/dev.txt
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
@@ -47,4 +58,4 @@ npm run build
 npm run lint
 ```
 
-Full stack: `docker compose up --build` from the repo root.
+Containers: `docker compose up --build` from the repo root (needs local Postgres, the `code-motion` Redis container, and `backend/.env.docker`).

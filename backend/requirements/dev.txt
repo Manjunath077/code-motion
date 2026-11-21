@@ -1,0 +1,8 @@
+# Local development and tests: everything the worker has, plus test tools.
+-r worker.txt
+# In-memory SQLite for repository unit tests (no real DB needed)
+aiosqlite==0.22.1
+pytest==9.2.0
+pytest-asyncio==1.5.0
+# In-memory Redis (with Lua for the rate limiter) — no real Redis needed
+fakeredis[lua]==2.40.0

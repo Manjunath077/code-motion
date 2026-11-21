@@ -1,0 +1,4 @@
+# Worker image: base + the render toolchain. The API never imports manim.
+-r base.txt
+# ManimCE pinned to 0.19.x — LLM-generated code targets this exact API.
+manim==0.19.1
